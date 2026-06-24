@@ -1,13 +1,13 @@
 # Vellium Search Engine
 
 ## Overview
-Vellium is a modern, AI-augmented search interface. Instead of just generating standard search results, Vellium queries the web for the user's prompt, retrieves search results using DuckDuckGo's HTML search, and concurrently prompts the Gemini 2.5 Flash model to generate a concise, highly accurate summary of the query. The application then dynamically constructs a responsive results page containing both the web links and the AI-generated summary, which is rendered securely within the main application window.
+Vellium is a modern, AI-augmented search interface. Instead of just generating standard search results, Vellium queries multiple open APIs simultaneously, retrieves search results from diverse sources (such as Wikipedia, Dev.to, HackerNews, StackOverflow, and more), and concurrently prompts the Gemini 2.5 Flash model to generate a concise, highly accurate summary of the query. The application then dynamically constructs a responsive results page containing both the web links and the AI-generated summary, which is rendered securely within the main application window.
 
 ## Architecture
 The project is built as a full-stack application leveraging modern web technologies:
 - **Frontend**: React 18, TypeScript, and Vite. The user interface is styled with Tailwind CSS, utilizing framer-motion for smooth transitions and lucide-react for iconography. The application simulates a browser-like experience with a top navigation bar, bookmarks, and a history panel.
 - **Backend**: Express.js server running on Node.js. During development, Vite is mounted as middleware for hot-module replacement and asset serving. In production, the server serves the statically built frontend from the `dist` directory.
-- **Search Engine Scraper**: The backend uses standard fetch and `cheerio` to scrape and parse DuckDuckGo's HTML search endpoint.
+- **Search Engine API Aggregator**: The backend uses standard fetch to concurrently query 8 different public APIs: Wikipedia, Dev.to, HackerNews, StackOverflow, Crossref, OpenLibrary, GitHub, and MDN Web Docs. This approach avoids bot-blocking issues typical of traditional search engine scraping.
 - **AI Integration**: The backend utilizes the `@google/genai` SDK to interface with Gemini. The AI prompt is crafted to ensure the AI acts as a search assistant, returning a markdown-formatted summary.
 - **Markdown Parsing**: The AI response is parsed into HTML on the server using `marked` and styled via Tailwind Typography.
 
@@ -15,9 +15,9 @@ The project is built as a full-stack application leveraging modern web technolog
 1. **User Input**: The user types a query into the Vellium search bar and hits Enter.
 2. **API Request**: The React frontend sends a POST request to the `/api/generate` endpoint on the Express backend, containing the user's prompt.
 3. **Concurrent Processing**:
-   - The server concurrently fetches the search results from DuckDuckGo and parses the HTML using Cheerio to extract titles, links, and snippets.
+   - The server concurrently fetches the search results from multiple open APIs and normalizes the data into a standard structure.
    - Simultaneously, the server sends the prompt to the Gemini API with system instructions to generate a markdown summary.
-4. **Assembly**: The server compiles the AI summary (parsed to HTML via `marked`) and the web results into a single, cohesive, self-contained HTML document styled with Tailwind CSS.
+4. **Assembly**: The server compiles the AI summary (parsed to HTML via `marked`) and the randomized mixed web results into a single, cohesive, self-contained HTML document styled with Tailwind CSS.
 5. **Rendering**: The Express server returns this HTML document as a JSON response. The React frontend injects this HTML into an isolated iframe to display the results securely to the user.
 
 ## Features
@@ -71,3 +71,6 @@ The project is built as a full-stack application leveraging modern web technolog
    ```
    The application will be accessible at `http://localhost:3000`.
 
+## LICENSE
+
+MIT License
