@@ -6,6 +6,132 @@ import { marked } from 'marked';
 
 dotenv.config();
 
+async function fetchSearchResults(query: string) {
+  const qEncode = encodeURIComponent(query);
+  const results: any[] = [];
+  
+  const fetchPromises = [
+    // 1. Wikipedia
+    fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${qEncode}&utf8=&format=json`)
+      .then(res => res.json())
+      .then(data => {
+        (data.query?.search || []).slice(0, 5).forEach((item: any) => {
+          results.push({
+            title: item.title,
+            link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+            snippet: item.snippet.replace(/<[^>]*>?/gm, ''),
+            source: 'Wikipedia'
+          });
+        });
+      }).catch(e => console.error('Wikipedia error:', e)),
+
+    // 2. Dev.to
+    fetch(`https://dev.to/api/articles?search=${qEncode}`)
+      .then(res => res.json())
+      .then(data => {
+        data.slice(0, 5).forEach((item: any) => {
+          results.push({
+            title: item.title,
+            link: item.url,
+            snippet: item.description,
+            source: 'Dev.to'
+          });
+        });
+      }).catch(e => console.error('Dev.to error:', e)),
+
+    // 3. HackerNews
+    fetch(`https://hn.algolia.com/api/v1/search?query=${qEncode}`)
+      .then(res => res.json())
+      .then(data => {
+        data.hits.slice(0, 5).forEach((item: any) => {
+          if (item.title && (item.url || item.story_url)) {
+            results.push({
+              title: item.title,
+              link: item.url || item.story_url,
+              snippet: 'HackerNews Discussion',
+              source: 'HackerNews'
+            });
+          }
+        });
+      }).catch(e => console.error('HN error:', e)),
+
+    // 4. StackOverflow
+    fetch(`https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${qEncode}&site=stackoverflow`)
+      .then(res => res.json())
+      .then(data => {
+        data.items.slice(0, 5).forEach((item: any) => {
+          results.push({
+            title: item.title,
+            link: item.link,
+            snippet: 'StackOverflow Question',
+            source: 'StackOverflow'
+          });
+        });
+      }).catch(e => console.error('SO error:', e)),
+
+    // 5. Crossref
+    fetch(`https://api.crossref.org/works?query=${qEncode}&select=title,URL,abstract&rows=5`)
+      .then(res => res.json())
+      .then(data => {
+        data.message.items.forEach((item: any) => {
+          results.push({
+            title: item.title?.[0] || 'Unknown Title',
+            link: item.URL,
+            snippet: (item.abstract || '').replace(/<[^>]*>?/gm, '').substring(0, 200) || 'Academic Paper',
+            source: 'Crossref'
+          });
+        });
+      }).catch(e => console.error('Crossref error:', e)),
+
+    // 6. OpenLibrary
+    fetch(`https://openlibrary.org/search.json?q=${qEncode}&limit=5`)
+      .then(res => res.json())
+      .then(data => {
+        data.docs.forEach((item: any) => {
+          results.push({
+            title: item.title,
+            link: `https://openlibrary.org${item.key}`,
+            snippet: item.author_name?.join(', ') || 'Unknown author',
+            source: 'OpenLibrary'
+          });
+        });
+      }).catch(e => console.error('OpenLibrary error:', e)),
+
+    // 7. GitHub
+    fetch(`https://api.github.com/search/repositories?q=${qEncode}&per_page=5`)
+      .then(res => res.json())
+      .then(data => {
+        data.items.forEach((item: any) => {
+          results.push({
+            title: item.full_name,
+            link: item.html_url,
+            snippet: item.description || 'GitHub Repository',
+            source: 'GitHub'
+          });
+        });
+      }).catch(e => console.error('GitHub error:', e)),
+
+    // 8. MDN Web Docs
+    fetch(`https://developer.mozilla.org/api/v1/search?q=${qEncode}`)
+      .then(res => res.json())
+      .then(data => {
+        data.documents.slice(0, 5).forEach((item: any) => {
+          results.push({
+            title: item.title,
+            link: `https://developer.mozilla.org${item.mdn_url}`,
+            snippet: item.summary,
+            source: 'MDN Web Docs'
+          });
+        });
+      }).catch(e => console.error('MDN error:', e))
+  ];
+
+  await Promise.allSettled(fetchPromises);
+  
+  // Sort results randomly to mix the sources
+  return results.sort(() => Math.random() - 0.5);
+}
+
 const app = express();
 app.use(express.json());
 
@@ -18,7 +144,10 @@ app.post('/api/generate', async (req, res) => {
       return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
     }
 
-    // Fetch AI answer with Google Search grounding
+    // Fetch search results concurrently
+    const searchPromise = fetchSearchResults(prompt);
+
+    // Fetch AI answer
     const ai = new GoogleGenAI({ apiKey });
     const systemPrompt = `You are a helpful AI search assistant. 
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
@@ -38,8 +167,7 @@ Format your response in Markdown. Do not include HTML tags.`;
             contents: prompt,
             config: {
                systemInstruction: systemPrompt,
-               temperature: 0.5,
-               tools: [{ googleSearch: {} }]
+               temperature: 0.5
             }
           });
           break;
@@ -54,33 +182,6 @@ Format your response in Markdown. Do not include HTML tags.`;
         }
       }
       aiAnswerMarkdown = aiResponse?.text || '';
-      
-      const chunks = aiResponse?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const supports = aiResponse?.candidates?.[0]?.groundingMetadata?.groundingSupports || [];
-      const uniqueLinks = new Set<string>();
-      
-      results = chunks
-        .map((chunk: any, i: number) => {
-          if (!chunk?.web?.uri || !chunk?.web?.title) return null;
-          
-          const supportingSegments = supports
-            .filter((support: any) => support.groundingChunkIndices?.includes(i))
-            .map((support: any) => support.segment?.text);
-            
-          const snippet = supportingSegments.join(' ').trim() || chunk.web.title;
-          
-          return {
-            title: chunk.web.title,
-            link: chunk.web.uri,
-            snippet
-          };
-        })
-        .filter((chunk: any) => {
-          if (!chunk) return false;
-          if (uniqueLinks.has(chunk.link)) return false;
-          uniqueLinks.add(chunk.link);
-          return true;
-        });
     } catch (error: any) {
       let errorMessage = error?.message || 'Failed to generate content.';
       if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
@@ -90,6 +191,8 @@ Format your response in Markdown. Do not include HTML tags.`;
       }
       console.error('Error generating AI answer:', error);
     }
+
+    results = await searchPromise;
 
     const aiAnswerHtml = aiError 
       ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
@@ -168,7 +271,7 @@ Format your response in Markdown. Do not include HTML tags.`;
                <div class="w-5 h-5 rounded bg-neutral-800 flex items-center justify-center">
                  <svg class="w-3 h-3 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
                </div>
-               <p class="text-xs text-neutral-400 font-medium truncate">${new URL(r.link.startsWith('http') ? r.link : 'https://'+r.link).hostname.replace('www.','')}</p>
+               <p class="text-xs text-neutral-400 font-medium truncate">${r.source} • ${new URL(r.link.startsWith('http') ? r.link : 'https://'+r.link).hostname.replace('www.','')}</p>
              </div>
              <h4 class="text-lg font-medium text-blue-400 group-hover:text-blue-300 group-hover:underline decoration-blue-500/30 underline-offset-4 mb-2 leading-tight">${r.title}</h4>
              <p class="text-sm text-neutral-300 leading-relaxed line-clamp-2">${r.snippet}</p>
