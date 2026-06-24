@@ -6,12 +6,23 @@ import { marked } from 'marked';
 
 dotenv.config();
 
-async function fetchSearchResults(query: string) {
+function detectIntents(query: string) {
+  return {
+    weather: /\b(weather|temperature|forecast)\b/i.test(query),
+    dictionary: /^(define|definition of|meaning of)\s+(.+)/i.test(query),
+    images: /\b(images?|pics?|pictures?|photos?)\b/i.test(query),
+    videos: /\b(videos?|youtube|watch)\b/i.test(query),
+    math: /^[\d\s\+\-\*\/\(\)\.\^\%]+$/.test(query) || /^(calculate|calc|math)\s+/i.test(query),
+    code: /\b(code|script|function|python|javascript|react|html|css|java|cpp|c\+\+|php)\b/i.test(query),
+  };
+}
+
+async function fetchSearchResults(query: string, intents: ReturnType<typeof detectIntents>) {
   const qEncode = encodeURIComponent(query);
   const results: any[] = [];
+  const widgets: any = {};
   
-  const fetchPromises = [
-    // 1. Wikipedia
+  const fetchPromises: Promise<any>[] = [
     fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${qEncode}&utf8=&format=json`)
       .then(res => res.json())
       .then(data => {
@@ -25,7 +36,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('Wikipedia error:', e)),
 
-    // 2. Dev.to
     fetch(`https://dev.to/api/articles?search=${qEncode}`)
       .then(res => res.json())
       .then(data => {
@@ -39,7 +49,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('Dev.to error:', e)),
 
-    // 3. HackerNews
     fetch(`https://hn.algolia.com/api/v1/search?query=${qEncode}`)
       .then(res => res.json())
       .then(data => {
@@ -55,7 +64,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('HN error:', e)),
 
-    // 4. StackOverflow
     fetch(`https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${qEncode}&site=stackoverflow`)
       .then(res => res.json())
       .then(data => {
@@ -69,7 +77,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('SO error:', e)),
 
-    // 5. Crossref
     fetch(`https://api.crossref.org/works?query=${qEncode}&select=title,URL,abstract&rows=5`)
       .then(res => res.json())
       .then(data => {
@@ -83,7 +90,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('Crossref error:', e)),
 
-    // 6. OpenLibrary
     fetch(`https://openlibrary.org/search.json?q=${qEncode}&limit=5`)
       .then(res => res.json())
       .then(data => {
@@ -97,7 +103,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('OpenLibrary error:', e)),
 
-    // 7. GitHub
     fetch(`https://api.github.com/search/repositories?q=${qEncode}&per_page=5`)
       .then(res => res.json())
       .then(data => {
@@ -111,7 +116,6 @@ async function fetchSearchResults(query: string) {
         });
       }).catch(e => console.error('GitHub error:', e)),
 
-    // 8. MDN Web Docs
     fetch(`https://developer.mozilla.org/api/v1/search?q=${qEncode}`)
       .then(res => res.json())
       .then(data => {
@@ -126,10 +130,84 @@ async function fetchSearchResults(query: string) {
       }).catch(e => console.error('MDN error:', e))
   ];
 
+  if (intents.weather) {
+      const cityMatch = query.replace(/\b(weather|temperature|forecast|in|for|what is the)\b/ig, '').trim() || 'London';
+      fetchPromises.push(
+          fetch(`https://wttr.in/${encodeURIComponent(cityMatch)}?format=j1`)
+          .then(r => r.json())
+          .then(data => {
+              if (data && data.nearest_area && data.current_condition) {
+                  widgets.weather = {
+                      location: data.nearest_area[0].areaName[0].value,
+                      temp: data.current_condition[0].temp_C,
+                      desc: data.current_condition[0].weatherDesc[0].value,
+                      feelsLike: data.current_condition[0].FeelsLikeC
+                  };
+              }
+          }).catch(e => console.error('Weather error:', e))
+      );
+  }
+
+  const dictMatch = query.match(/^(?:define|definition of|meaning of)\s+(.+)/i);
+  if (dictMatch) {
+      const word = dictMatch[1];
+      fetchPromises.push(
+          fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`)
+          .then(r => r.json())
+          .then(data => {
+              if (data && data[0]) {
+                 widgets.dictionary = {
+                     word: data[0].word,
+                     phonetic: data[0].phonetic,
+                     meanings: data[0].meanings.slice(0, 2).map((m: any) => ({
+                         partOfSpeech: m.partOfSpeech,
+                         definition: m.definitions[0]?.definition
+                     }))
+                 };
+              }
+          }).catch(e => console.error('Dictionary error:', e))
+      );
+  }
+
+  if (intents.images) {
+      const imgQuery = query.replace(/\b(images?|pics?|pictures?|photos?|of|show me)\b/ig, '').trim() || 'nature';
+      fetchPromises.push(
+          fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(imgQuery)}&prop=imageinfo&iiprop=url&format=json`)
+          .then(r => r.json())
+          .then(data => {
+              if (data.query && data.query.pages) {
+                  widgets.images = Object.values(data.query.pages)
+                      .map((p: any) => p.imageinfo?.[0]?.url)
+                      .filter(Boolean)
+                      .slice(0, 6);
+              }
+          }).catch(e => console.error('Images error:', e))
+      );
+  }
+
+  if (intents.videos) {
+      const vidQuery = query.replace(/\b(videos?|youtube|watch|show me)\b/ig, '').trim() || 'news';
+      fetchPromises.push(
+          fetch(`https://api.dailymotion.com/videos?search=${encodeURIComponent(vidQuery)}&limit=4&fields=id,title,thumbnail_360_url`)
+          .then(r => r.json())
+          .then(data => {
+              if (data.list) {
+                  widgets.videos = data.list.map((v: any) => ({
+                      title: v.title,
+                      thumbnail: v.thumbnail_360_url,
+                      link: `https://www.dailymotion.com/video/${v.id}`
+                  }));
+              }
+          }).catch(e => console.error('Videos error:', e))
+      );
+  }
+
   await Promise.allSettled(fetchPromises);
   
-  // Sort results randomly to mix the sources
-  return results.sort(() => Math.random() - 0.5);
+  return {
+    results: results.sort(() => Math.random() - 0.5),
+    widgets
+  };
 }
 
 const app = express();
@@ -144,18 +222,23 @@ app.post('/api/generate', async (req, res) => {
       return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
     }
 
-    // Fetch search results concurrently
-    const searchPromise = fetchSearchResults(prompt);
+    const intents = detectIntents(prompt);
+    const searchPromise = fetchSearchResults(prompt, intents);
 
-    // Fetch AI answer
     const ai = new GoogleGenAI({ apiKey });
-    const systemPrompt = `You are a helpful AI search assistant. 
+    
+    let systemPrompt = `You are a helpful AI search assistant. 
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
 Format your response in Markdown. Do not include HTML tags.`;
 
+    if (intents.math) {
+        systemPrompt = `You are an expert mathematician and calculator. The user is asking a math question. Provide the final numerical answer clearly at the very top in a large heading (e.g., # Answer: 42), followed by a brief step-by-step explanation or formula.`;
+    } else if (intents.code) {
+        systemPrompt = `You are an expert software engineer. The user is asking a programming question. Provide the answer with clear, well-commented code blocks and a brief explanation of how it works.`;
+    }
+
     let aiAnswerMarkdown = '';
     let aiError = '';
-    let results: any[] = [];
 
     try {
       let retries = 2;
@@ -192,7 +275,9 @@ Format your response in Markdown. Do not include HTML tags.`;
       console.error('Error generating AI answer:', error);
     }
 
-    results = await searchPromise;
+    const searchData = await searchPromise;
+    const results = searchData.results;
+    const widgets = searchData.widgets;
 
     const aiAnswerHtml = aiError 
       ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
@@ -210,7 +295,6 @@ Format your response in Markdown. Do not include HTML tags.`;
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
     body { font-family: 'Inter', sans-serif; }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
-    /* Custom prose styles for dark mode */
     .prose-invert {
       --tw-prose-body: #d4d4d4;
       --tw-prose-headings: #22d3ee;
@@ -253,6 +337,71 @@ Format your response in Markdown. Do not include HTML tags.`;
       </div>
     </div>
 
+    <!-- Widgets Section -->
+    ${widgets.weather ? `
+      <div class="mb-6 bg-gradient-to-br from-blue-900 to-cyan-900 rounded-2xl p-6 shadow-xl border border-blue-800">
+         <div class="flex items-center justify-between">
+           <div>
+             <h3 class="text-4xl font-bold text-white">${widgets.weather.temp}°C</h3>
+             <p class="text-blue-200 text-lg mt-1">${widgets.weather.location}</p>
+           </div>
+           <div class="text-right">
+             <p class="text-2xl font-medium text-white capitalize">${widgets.weather.desc}</p>
+             <p class="text-sm text-blue-300 mt-1">Feels like ${widgets.weather.feelsLike}°C</p>
+           </div>
+         </div>
+      </div>
+    ` : ''}
+
+    ${widgets.dictionary ? `
+      <div class="mb-6 bg-[#161616] rounded-2xl p-6 shadow-xl border border-neutral-800">
+         <h3 class="text-3xl font-serif font-bold text-white mb-2">${widgets.dictionary.word}</h3>
+         <p class="text-cyan-400 font-mono text-sm mb-5">${widgets.dictionary.phonetic || ''}</p>
+         <div class="space-y-4">
+           ${widgets.dictionary.meanings.map((m: any) => `
+             <div>
+               <span class="text-xs font-bold uppercase tracking-wider text-neutral-500">${m.partOfSpeech}</span>
+               <p class="text-neutral-300 mt-1">${m.definition}</p>
+             </div>
+           `).join('')}
+         </div>
+      </div>
+    ` : ''}
+
+    ${widgets.images && widgets.images.length > 0 ? `
+      <div class="mb-6">
+        <h3 class="text-lg font-medium text-neutral-200 mb-3 flex items-center"><svg class="w-5 h-5 mr-2 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg> Images</h3>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+          ${widgets.images.map((img: string) => `
+            <a href="${img}" target="_blank" class="block rounded-lg overflow-hidden border border-neutral-800 hover:border-cyan-500 transition-colors">
+              <img src="${img}" class="w-full aspect-video object-cover" alt="Search result image" loading="lazy" />
+            </a>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    ${widgets.videos && widgets.videos.length > 0 ? `
+      <div class="mb-6">
+        <h3 class="text-lg font-medium text-neutral-200 mb-3 flex items-center"><svg class="w-5 h-5 mr-2 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> Videos</h3>
+        <div class="grid grid-cols-2 gap-4">
+          ${widgets.videos.map((vid: any) => `
+            <a href="${vid.link}" target="_blank" class="block group">
+              <div class="relative rounded-lg overflow-hidden border border-neutral-800 mb-2">
+                <img src="${vid.thumbnail}" class="w-full aspect-video object-cover group-hover:scale-105 transition-transform duration-300" alt="${vid.title}" loading="lazy" />
+                <div class="absolute inset-0 bg-black/30 flex items-center justify-center group-hover:bg-black/10 transition-colors">
+                   <div class="w-10 h-10 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center">
+                     <svg class="w-5 h-5 text-white ml-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"></path></svg>
+                   </div>
+                </div>
+              </div>
+              <h4 class="text-sm font-medium text-neutral-300 line-clamp-2 group-hover:text-cyan-400 transition-colors">${vid.title}</h4>
+            </a>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+
     <!-- Web Results Section -->
     <div class="mb-6 flex items-center space-x-3 border-b border-neutral-800/80 pb-4">
       <div class="w-8 h-8 rounded-full bg-neutral-900 flex items-center justify-center border border-neutral-800">
@@ -264,7 +413,7 @@ Format your response in Markdown. Do not include HTML tags.`;
     </div>
     
     <div class="space-y-6">
-      ${results.length > 0 ? results.map(r => `
+      ${results.length > 0 ? results.map((r: any) => `
         <div class="group">
            <a href="${r.link}" target="_blank" class="block p-5 bg-[#111111] border border-neutral-800/50 hover:border-neutral-700 hover:bg-[#141414] rounded-xl transition-all duration-200 shadow-sm hover:shadow-md">
              <div class="flex items-center space-x-2 mb-2">
@@ -290,7 +439,6 @@ Format your response in Markdown. Do not include HTML tags.`;
   }
 });
 
-// Setup Vite middleware for local development
 async function setupVite() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -308,7 +456,6 @@ async function setupVite() {
   }
 }
 
-// Start server if not running in serverless environment
 if (process.env.VERCEL !== '1') {
   const PORT = process.env.PORT || 3000;
   setupVite().then(() => {
@@ -318,5 +465,4 @@ if (process.env.VERCEL !== '1') {
   });
 }
 
-// Export the Express app for Vercel
 export default app;
