@@ -633,10 +633,15 @@ export default function App() {
                                 <div className="font-medium text-neutral-200 flex items-center space-x-2">
                                   <span>Clear browsing data</span>
                                 </div>
-                                <div className="text-sm text-neutral-500 mt-1">Clear history, bookmarks, and cache</div>
+                                <div className="text-sm text-neutral-500 mt-1">Clear history and cache (keeps bookmarks)</div>
                               </div>
                               <button 
-                                onClick={() => { setHistory([]); setBookmarks([]); setCurrentIndex(-1); setShowSettings(false); }}
+                                onClick={() => { 
+                                  const newHistory = history.filter(h => bookmarks.some(b => b.prompt === h.prompt));
+                                  setHistory(newHistory); 
+                                  setCurrentIndex(newHistory.length > 0 ? newHistory.length - 1 : -1); 
+                                  setShowSettings(false); 
+                                }}
                                 className="px-4 py-2 bg-red-500/10 text-red-400 hover:bg-red-500/20 rounded-lg transition-colors text-sm font-medium border border-red-500/20"
                               >
                                 Clear Data
