@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
-import * as cheerio from 'cheerio';
 import { marked } from 'marked';
 
 dotenv.config();
@@ -19,7 +18,7 @@ app.post('/api/generate', async (req, res) => {
       return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
     }
 
-    // Fetch AI answer
+    // Fetch AI answer with Google Search grounding
     const ai = new GoogleGenAI({ apiKey });
     const systemPrompt = `You are a helpful AI search assistant. 
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
@@ -38,9 +37,9 @@ Format your response in Markdown. Do not include HTML tags.`;
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
-              systemInstruction: systemPrompt,
-              temperature: 0.5,
-              tools: [{ googleSearch: {} }]
+               systemInstruction: systemPrompt,
+               temperature: 0.5,
+               tools: [{ googleSearch: {} }]
             }
           });
           break;
@@ -57,12 +56,18 @@ Format your response in Markdown. Do not include HTML tags.`;
       aiAnswerMarkdown = aiResponse?.text || '';
       
       const chunks = aiResponse?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const uniqueLinks = new Set<string>();
       results = chunks
         .filter((chunk: any) => chunk?.web?.uri && chunk?.web?.title)
+        .filter((chunk: any) => {
+          if (uniqueLinks.has(chunk.web.uri)) return false;
+          uniqueLinks.add(chunk.web.uri);
+          return true;
+        })
         .map((chunk: any) => ({
           title: chunk.web.title,
           link: chunk.web.uri,
-          snippet: chunk.web.title // fallback snippet
+          snippet: chunk.web.title // fallback snippet since grounding chunks don't always have a snippet
         }));
     } catch (error: any) {
       let errorMessage = error?.message || 'Failed to generate content.';
