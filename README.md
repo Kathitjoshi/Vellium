@@ -61,15 +61,11 @@ The project is built as a full-stack application leveraging modern web technolog
    ```bash
    npm install
    ```
-3. Create a `.env` file in the root directory based on the provided example:
-   ```bash
-   cp .env.example .env
-   ```
-4. Edit the `.env` file and insert your Gemini API Key:
+3. Create and edit the `.env` file and insert your Gemini API Key:
    ```env
    GEMINI_API_KEY=your_actual_api_key_here
    ```
-5. Start the development server:
+4. Start the development server:
    ```bash
    npm run dev
    ```
