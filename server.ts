@@ -6,21 +6,6 @@ import { marked } from 'marked';
 
 dotenv.config();
 
-async function fetchSearchResults(query: string) {
-  try {
-    const res = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&utf8=&format=json`);
-    const data = await res.json();
-    return (data.query?.search || []).slice(0, 10).map((item: any) => ({
-      title: item.title,
-      link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
-      snippet: item.snippet.replace(/<[^>]*>?/gm, '') // Remove HTML tags
-    }));
-  } catch (error) {
-    console.error('Search fetch error:', error);
-    return [];
-  }
-}
-
 const app = express();
 app.use(express.json());
 
@@ -33,10 +18,7 @@ app.post('/api/generate', async (req, res) => {
       return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
     }
 
-    // Fetch search results concurrently
-    const searchPromise = fetchSearchResults(prompt);
-
-    // Fetch AI answer
+    // Fetch AI answer with Google Search grounding
     const ai = new GoogleGenAI({ apiKey });
     const systemPrompt = `You are a helpful AI search assistant. 
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
@@ -55,8 +37,9 @@ Format your response in Markdown. Do not include HTML tags.`;
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
-              systemInstruction: systemPrompt,
-              temperature: 0.5
+               systemInstruction: systemPrompt,
+               temperature: 0.5,
+               tools: [{ googleSearch: {} }]
             }
           });
           break;
@@ -71,6 +54,33 @@ Format your response in Markdown. Do not include HTML tags.`;
         }
       }
       aiAnswerMarkdown = aiResponse?.text || '';
+      
+      const chunks = aiResponse?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      const supports = aiResponse?.candidates?.[0]?.groundingMetadata?.groundingSupports || [];
+      const uniqueLinks = new Set<string>();
+      
+      results = chunks
+        .map((chunk: any, i: number) => {
+          if (!chunk?.web?.uri || !chunk?.web?.title) return null;
+          
+          const supportingSegments = supports
+            .filter((support: any) => support.groundingChunkIndices?.includes(i))
+            .map((support: any) => support.segment?.text);
+            
+          const snippet = supportingSegments.join(' ').trim() || chunk.web.title;
+          
+          return {
+            title: chunk.web.title,
+            link: chunk.web.uri,
+            snippet
+          };
+        })
+        .filter((chunk: any) => {
+          if (!chunk) return false;
+          if (uniqueLinks.has(chunk.link)) return false;
+          uniqueLinks.add(chunk.link);
+          return true;
+        });
     } catch (error: any) {
       let errorMessage = error?.message || 'Failed to generate content.';
       if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
@@ -80,8 +90,6 @@ Format your response in Markdown. Do not include HTML tags.`;
       }
       console.error('Error generating AI answer:', error);
     }
-
-    results = await searchPromise;
 
     const aiAnswerHtml = aiError 
       ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
