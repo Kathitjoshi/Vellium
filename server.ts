@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import * as cheerio from 'cheerio';
@@ -38,75 +37,72 @@ async function fetchSearchResults(query: string) {
   }
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+app.use(express.json());
 
-  app.use(express.json());
+app.post('/api/generate', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
+    }
 
-  app.post('/api/generate', async (req, res) => {
-    try {
-      const { prompt } = req.body;
-      
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
-      }
+    // Fetch search results concurrently
+    const searchPromise = fetchSearchResults(prompt);
 
-      // Fetch search results concurrently
-      const searchPromise = fetchSearchResults(prompt);
-
-      // Fetch AI answer
-      const ai = new GoogleGenAI({ apiKey });
-      const systemPrompt = `You are a helpful AI search assistant. 
+    // Fetch AI answer
+    const ai = new GoogleGenAI({ apiKey });
+    const systemPrompt = `You are a helpful AI search assistant. 
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
 Format your response in Markdown. Do not include HTML tags.`;
 
-      let aiAnswerMarkdown = '';
-      let aiError = '';
+    let aiAnswerMarkdown = '';
+    let aiError = '';
 
-      try {
-        let retries = 2;
-        let aiResponse;
-        while (retries > 0) {
-          try {
-            aiResponse = await ai.models.generateContent({
-              model: 'gemini-2.5-flash',
-              contents: prompt,
-              config: {
-                systemInstruction: systemPrompt,
-                temperature: 0.5,
-              }
-            });
-            break;
-          } catch (error: any) {
-            if (error?.status === 503 || error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE')) {
-              retries--;
-              if (retries === 0) throw error;
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            } else {
-              throw error;
+    try {
+      let retries = 2;
+      let aiResponse;
+      while (retries > 0) {
+        try {
+          aiResponse = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+              systemInstruction: systemPrompt,
+              temperature: 0.5,
             }
+          });
+          break;
+        } catch (error: any) {
+          if (error?.status === 503 || error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE')) {
+            retries--;
+            if (retries === 0) throw error;
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            throw error;
           }
         }
-        aiAnswerMarkdown = aiResponse?.text || '';
-      } catch (error: any) {
-        let errorMessage = error?.message || 'Failed to generate content.';
-        if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
-          aiError = '[SYS_ERR]: AI generation quota exceeded. Please try again later or check your API key billing details.';
-        } else {
-          aiError = `[SYS_ERR]: AI generation failed: ${errorMessage}`;
-        }
-        console.error('Error generating AI answer:', error);
       }
+      aiAnswerMarkdown = aiResponse?.text || '';
+    } catch (error: any) {
+      let errorMessage = error?.message || 'Failed to generate content.';
+      if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
+        aiError = '[SYS_ERR]: AI generation quota exceeded. Please try again later or check your API key billing details.';
+      } else {
+        aiError = `[SYS_ERR]: AI generation failed: ${errorMessage}`;
+      }
+      console.error('Error generating AI answer:', error);
+    }
 
-      const results = await searchPromise;
+    const results = await searchPromise;
 
-      const aiAnswerHtml = aiError 
-        ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
-        : marked.parse(aiAnswerMarkdown);
+    const aiAnswerHtml = aiError 
+      ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
+      : marked.parse(aiAnswerMarkdown);
 
-      const htmlTemplate = `<!DOCTYPE html>
+    const htmlTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -191,14 +187,17 @@ Format your response in Markdown. Do not include HTML tags.`;
 </body>
 </html>`;
 
-      res.json({ html: htmlTemplate });
-    } catch (error: any) {
-      console.error('Fatal generation error:', error);
-      res.status(500).json({ error: error.message || 'An unexpected error occurred.' });
-    }
-  });
+    res.json({ html: htmlTemplate });
+  } catch (error: any) {
+    console.error('Fatal generation error:', error);
+    res.status(500).json({ error: error.message || 'An unexpected error occurred.' });
+  }
+});
 
+// Setup Vite middleware for local development
+async function setupVite() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -211,10 +210,17 @@ Format your response in Markdown. Do not include HTML tags.`;
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+}
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+// Start server if not running in serverless environment
+if (process.env.VERCEL !== '1') {
+  const PORT = process.env.PORT || 3000;
+  setupVite().then(() => {
+    app.listen(PORT, '0.0.0.0' as any, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   });
 }
 
-startServer();
+// Export the Express app for Vercel
+export default app;
