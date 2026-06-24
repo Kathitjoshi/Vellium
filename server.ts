@@ -202,10 +202,67 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
       );
   }
 
+  if (intents.math) {
+      let expr = query.replace(/^(?:calculate|calc|math)\s+/i, '').trim();
+      expr = expr.replace(/square root of\s*(\d+(\.\d+)?)/i, 'sqrt($1)');
+      fetchPromises.push(
+          fetch(`https://api.mathjs.org/v4/?expr=${encodeURIComponent(expr)}`)
+          .then(r => r.text())
+          .then(data => {
+              if (data && !data.startsWith('Error') && !data.includes('HTML')) {
+                  widgets.math = {
+                      expression: expr,
+                      result: data
+                  };
+              }
+          }).catch(e => console.error('Math error:', e))
+      );
+  }
+
+  if (query.split(' ').length <= 3) {
+      fetchPromises.push(
+          fetch(`https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(query)}`)
+          .then(r => r.json())
+          .then(data => {
+              if (data && data.length > 0) {
+                  const bestMatch = data.find((d:any) => d.name.toLowerCase() === query.toLowerCase()) || data[0];
+                  if (bestMatch) {
+                      widgets.website = bestMatch;
+                  }
+              }
+          }).catch(e => console.error('Website autocomplete error:', e))
+      );
+  }
+
   await Promise.allSettled(fetchPromises);
   
   return {
-    results: results.sort(() => Math.random() - 0.5),
+    results: results.sort((a, b) => {
+      const score = (r: any) => {
+         let s = 0;
+         const source = r.source;
+         if (intents.code) {
+             if (source === 'MDN Web Docs') s = 100;
+             else if (source === 'StackOverflow') s = 90;
+             else if (source === 'GitHub') s = 80;
+             else if (source === 'Dev.to') s = 70;
+             else if (source === 'Wikipedia') s = 60;
+             else if (source === 'HackerNews') s = 50;
+         } else {
+             if (source === 'Wikipedia') s = 100;
+             else if (source === 'MDN Web Docs') s = 50;
+             else if (source === 'Dev.to') s = 40;
+             else if (source === 'HackerNews') s = 30;
+         }
+         if (source === 'Crossref') s = 0;
+         
+         if (r.title.toLowerCase().includes(query.toLowerCase())) {
+             s += 15;
+         }
+         return s;
+      };
+      return score(b) - score(a);
+    }),
     widgets
   };
 }
@@ -350,6 +407,23 @@ Format your response in Markdown. Do not include HTML tags.`;
              <p class="text-sm text-blue-300 mt-1">Feels like ${widgets.weather.feelsLike}°C</p>
            </div>
          </div>
+      </div>
+    ` : ''}
+
+    ${widgets.website ? `
+      <div class="mb-6 bg-[#161616] rounded-2xl p-6 shadow-xl border border-neutral-800 flex items-center space-x-4">
+         ${widgets.website.logo ? `<img src="${widgets.website.logo}" class="w-12 h-12 rounded bg-white p-1" alt="Logo">` : `<div class="w-12 h-12 rounded bg-neutral-800 flex items-center justify-center"><svg class="w-6 h-6 text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path></svg></div>`}
+         <div>
+            <h3 class="text-xl font-bold text-white">${widgets.website.name}</h3>
+            <a href="https://${widgets.website.domain}" target="_blank" class="text-cyan-400 text-sm hover:underline">${widgets.website.domain}</a>
+         </div>
+      </div>
+    ` : ''}
+
+    ${widgets.math ? `
+      <div class="mb-6 bg-[#111111] rounded-2xl p-6 shadow-xl border border-neutral-800 font-mono">
+         <p class="text-neutral-400 text-sm mb-2">${widgets.math.expression} =</p>
+         <h3 class="text-4xl font-bold text-cyan-400">${widgets.math.result}</h3>
       </div>
     ` : ''}
 
