@@ -17,15 +17,19 @@ The project is built as a full-stack application leveraging modern web technolog
 3. **Concurrent Processing**:
    - The server concurrently fetches the search results from multiple open APIs and normalizes the data into a standard structure.
    - Simultaneously, the server sends the prompt to the Gemini API with system instructions to generate a markdown summary.
-4. **Assembly**: The server compiles the AI summary (parsed to HTML via `marked`) and the randomized mixed web results into a single, cohesive, self-contained HTML document styled with Tailwind CSS.
+4. **Assembly**: The server compiles the AI summary (parsed to HTML via `marked`), contextually ranked web results, and dynamic widgets into a single, cohesive, self-contained HTML document styled with Tailwind CSS.
 5. **Rendering**: The Express server returns this HTML document as a JSON response. The React frontend injects this HTML into an isolated iframe to display the results securely to the user.
 
 ## Features
-- **AI Search Summary**: Get immediate, AI-generated answers alongside traditional web results.
-- **Web Results Integration**: Extracts up to 50 relevant search results directly from the web.
+- **Multimodal Intent Engine**: Analyzes user queries to detect specific intents like Weather (wttr.in), Dictionary Definitions (Dictionary API), Images (Wikimedia), Videos (Dailymotion), Audio/Music (iTunes API), Math (Math.js), Documents/Formats, or Brand websites (Clearbit Autocomplete), and injects customized rich UI widgets for those domains to save AI quotas.
+- **Concurrent API Aggregation**: Parallelizes fetches across open public APIs (Wikipedia, StackOverflow, MDN, Dev.to) to ensure instant web search coverage, while dynamically activating Academic endpoints (Crossref, OpenLibrary) only for related subjects (history, science, etc.).
+- **Contextual Ranking Engine**: Rather than randomizing results, the engine prioritizes sources based on the query intent (e.g., boosting MDN and StackOverflow for coding queries, and Wikipedia for history/science) and matches exact title keywords.
+- **AI Search Summary**: Get immediate, AI-generated answers alongside traditional web results, automatically adapting to the user's intent (e.g., calculator or coding modes).
 - **Bookmarks & History**: Save your favorite queries and review your past searches within the session.
-- **Customizable Interface**: Access the settings panel to tweak privacy options and appearance.
 - **Resilient AI Handling**: Includes fallback mechanisms and error handling for AI generation quota limits or service unavailability.
+
+## Technical Notes
+- **Datacenter Blocking Issue**: Almost all major cloud hosting platforms (Vercel, Render, AWS, Heroku, etc.) assign Datacenter IP addresses. Bot protection systems (like Cloudflare), which safeguard search engines like DuckDuckGo, Yahoo, and Google, indiscriminately block these datacenter IPs to prevent automated scraping. Switching from Vercel to Render, or using a headless browser (like Puppeteer) on those platforms, won't bypass this natively because the traffic still originates from a datacenter. To truly scrape those engines in production, you would need to route requests through Residential Proxy networks (e.g., BrightData, Oxylabs) which bypass datacenter blocks. To maintain a free, robust application, this app aggregates data from fully open developer APIs instead.
 
 ## Project Structure
 ```text
