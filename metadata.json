@@ -1,0 +1,6 @@
+{
+  "name": "Vellium",
+  "description": "Vellium is a modern, AI-powered browser interface that generates full websites in real-time based on your prompts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
