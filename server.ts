@@ -14,6 +14,9 @@ function detectIntents(query: string) {
     videos: /\b(videos?|youtube|watch)\b/i.test(query),
     math: /^[\d\s\+\-\*\/\(\)\.\^\%]+$/.test(query) || /^(calculate|calc|math)\s+/i.test(query),
     code: /\b(code|script|function|python|javascript|react|html|css|java|cpp|c\+\+|php)\b/i.test(query),
+    academic: /\b(history|science|physics|chemistry|biology|english|geography|computer|languages|culture|roman|empire|war)\b/i.test(query),
+    audio: /\b(audio|music|song|mp3|podcast|sound|listen)\b/i.test(query),
+    documents: /\b(pdf|doc|docx|ppt|pptx|xls|xlsx|csv|json|xml|format)\b/i.test(query),
   };
 }
 
@@ -77,32 +80,6 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
         });
       }).catch(e => console.error('SO error:', e)),
 
-    fetch(`https://api.crossref.org/works?query=${qEncode}&select=title,URL,abstract&rows=5`)
-      .then(res => res.json())
-      .then(data => {
-        data.message.items.forEach((item: any) => {
-          results.push({
-            title: item.title?.[0] || 'Unknown Title',
-            link: item.URL,
-            snippet: (item.abstract || '').replace(/<[^>]*>?/gm, '').substring(0, 200) || 'Academic Paper',
-            source: 'Crossref'
-          });
-        });
-      }).catch(e => console.error('Crossref error:', e)),
-
-    fetch(`https://openlibrary.org/search.json?q=${qEncode}&limit=5`)
-      .then(res => res.json())
-      .then(data => {
-        data.docs.forEach((item: any) => {
-          results.push({
-            title: item.title,
-            link: `https://openlibrary.org${item.key}`,
-            snippet: item.author_name?.join(', ') || 'Unknown author',
-            source: 'OpenLibrary'
-          });
-        });
-      }).catch(e => console.error('OpenLibrary error:', e)),
-
     fetch(`https://api.github.com/search/repositories?q=${qEncode}&per_page=5`)
       .then(res => res.json())
       .then(data => {
@@ -129,6 +106,57 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
         });
       }).catch(e => console.error('MDN error:', e))
   ];
+
+  if (intents.academic) {
+      fetchPromises.push(
+        fetch(`https://api.crossref.org/works?query=${qEncode}&select=title,URL,abstract&rows=5`)
+          .then(res => res.json())
+          .then(data => {
+            data.message.items.forEach((item: any) => {
+              results.push({
+                title: item.title?.[0] || 'Unknown Title',
+                link: item.URL,
+                snippet: (item.abstract || '').replace(/<[^>]*>?/gm, '').substring(0, 200) || 'Academic Paper',
+                source: 'Crossref'
+              });
+            });
+          }).catch(e => console.error('Crossref error:', e))
+      );
+      
+      fetchPromises.push(
+        fetch(`https://openlibrary.org/search.json?q=${qEncode}&limit=5`)
+          .then(res => res.json())
+          .then(data => {
+            data.docs.forEach((item: any) => {
+              results.push({
+                title: item.title,
+                link: `https://openlibrary.org${item.key}`,
+                snippet: item.author_name?.join(', ') || 'Unknown author',
+                source: 'OpenLibrary'
+              });
+            });
+          }).catch(e => console.error('OpenLibrary error:', e))
+      );
+  }
+
+  if (intents.audio) {
+      const audioQuery = query.replace(/\b(audio|music|song|mp3|podcast|sound|listen)\b/ig, '').trim() || query;
+      fetchPromises.push(
+          fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(audioQuery)}&limit=4&entity=song`)
+          .then(r => r.json())
+          .then(data => {
+              if (data.results && data.results.length > 0) {
+                  widgets.audio = data.results.map((v: any) => ({
+                      title: v.trackName,
+                      artist: v.artistName,
+                      thumbnail: v.artworkUrl100,
+                      preview: v.previewUrl,
+                      link: v.trackViewUrl
+                  }));
+              }
+          }).catch(e => console.error('Audio error:', e))
+      );
+  }
 
   if (intents.weather) {
       const cityMatch = query.replace(/\b(weather|temperature|forecast|in|for|what is the)\b/ig, '').trim() || 'London';
@@ -248,20 +276,42 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
              else if (source === 'Dev.to') s = 70;
              else if (source === 'Wikipedia') s = 60;
              else if (source === 'HackerNews') s = 50;
+         } else if (intents.academic) {
+             if (source === 'Crossref') s = 100;
+             else if (source === 'OpenLibrary') s = 90;
+             else if (source === 'Wikipedia') s = 80;
          } else {
              if (source === 'Wikipedia') s = 100;
-             else if (source === 'MDN Web Docs') s = 50;
-             else if (source === 'Dev.to') s = 40;
+             else if (source === 'MDN Web Docs') s = 20;
+             else if (source === 'Dev.to') s = 20;
              else if (source === 'HackerNews') s = 30;
+             else s = 10;
          }
-         if (source === 'Crossref') s = 0;
          
-         if (r.title.toLowerCase().includes(query.toLowerCase())) {
-             s += 15;
+         const titleLower = r.title.toLowerCase();
+         const snippetLower = r.snippet.toLowerCase();
+         const qWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+         
+         let matchScore = 0;
+         qWords.forEach(w => {
+            if (titleLower.includes(w)) matchScore += 30;
+            if (snippetLower.includes(w)) matchScore += 10;
+         });
+         s += matchScore;
+         
+         if (titleLower.includes(query.toLowerCase())) {
+             s += 100;
          }
          return s;
       };
       return score(b) - score(a);
+    }).filter((r, i, arr) => {
+      // Filter out low relevance generic results if we have good ones
+      const qWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+      const titleLower = r.title.toLowerCase();
+      const snippetLower = r.snippet.toLowerCase();
+      const hasMatch = qWords.some(w => titleLower.includes(w) || snippetLower.includes(w));
+      return hasMatch || i < 3; // Keep at least top 3 if no exact word matches
     }),
     widgets
   };
@@ -292,6 +342,8 @@ Format your response in Markdown. Do not include HTML tags.`;
         systemPrompt = `You are an expert mathematician and calculator. The user is asking a math question. Provide the final numerical answer clearly at the very top in a large heading (e.g., # Answer: 42), followed by a brief step-by-step explanation or formula.`;
     } else if (intents.code) {
         systemPrompt = `You are an expert software engineer. The user is asking a programming question. Provide the answer with clear, well-commented code blocks and a brief explanation of how it works.`;
+    } else if (intents.documents) {
+        systemPrompt = `You are a data and document formatting expert. The user is asking about a specific document format (PDF, JSON, CSV, XML, etc.). Provide a clear structural example or explain how to parse/generate that format efficiently.`;
     }
 
     let aiAnswerMarkdown = '';
@@ -395,6 +447,24 @@ Format your response in Markdown. Do not include HTML tags.`;
     </div>
 
     <!-- Widgets Section -->
+    ${widgets.audio ? `
+      <div class="mb-6">
+        <h3 class="text-lg font-medium text-neutral-200 mb-3 flex items-center"><svg class="w-5 h-5 mr-2 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg> Audio & Music</h3>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ${widgets.audio.map((track: any) => `
+            <div class="bg-[#161616] rounded-xl p-4 flex items-center space-x-4 border border-neutral-800">
+               <img src="${track.thumbnail}" class="w-16 h-16 rounded-md shadow-md" alt="${track.title}">
+               <div class="flex-1 min-w-0">
+                  <h4 class="text-white font-medium truncate">${track.title}</h4>
+                  <p class="text-neutral-400 text-sm truncate">${track.artist}</p>
+                  <audio controls class="w-full h-8 mt-2 opacity-80" src="${track.preview}"></audio>
+               </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+
     ${widgets.weather ? `
       <div class="mb-6 bg-gradient-to-br from-blue-900 to-cyan-900 rounded-2xl p-6 shadow-xl border border-blue-800">
          <div class="flex items-center justify-between">
