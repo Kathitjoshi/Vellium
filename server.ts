@@ -7,36 +7,6 @@ import { marked } from 'marked';
 
 dotenv.config();
 
-async function fetchSearchResults(query: string) {
-  try {
-    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5'
-      }
-    });
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const results: any[] = [];
-    $('.result__body').each((i, el) => {
-      const title = $(el).find('.result__title .result__a').text().trim();
-      let link = $(el).find('.result__title .result__a').attr('href');
-      const snippet = $(el).find('.result__snippet').text().trim();
-      if (link && link.startsWith('//duckduckgo.com/l/?uddg=')) {
-        link = decodeURIComponent(link.split('uddg=')[1].split('&')[0]);
-      }
-      if (title && link) {
-        results.push({ title, link, snippet });
-      }
-    });
-    return results.slice(0, 50);
-  } catch (error) {
-    console.error('Search fetch error:', error);
-    return [];
-  }
-}
-
 const app = express();
 app.use(express.json());
 
@@ -49,9 +19,6 @@ app.post('/api/generate', async (req, res) => {
       return res.status(500).json({ error: 'Gemini API Key is missing. Please add it to your environment variables.' });
     }
 
-    // Fetch search results concurrently
-    const searchPromise = fetchSearchResults(prompt);
-
     // Fetch AI answer
     const ai = new GoogleGenAI({ apiKey });
     const systemPrompt = `You are a helpful AI search assistant. 
@@ -60,6 +27,7 @@ Format your response in Markdown. Do not include HTML tags.`;
 
     let aiAnswerMarkdown = '';
     let aiError = '';
+    let results: any[] = [];
 
     try {
       let retries = 2;
@@ -72,6 +40,7 @@ Format your response in Markdown. Do not include HTML tags.`;
             config: {
               systemInstruction: systemPrompt,
               temperature: 0.5,
+              tools: [{ googleSearch: {} }]
             }
           });
           break;
@@ -86,6 +55,15 @@ Format your response in Markdown. Do not include HTML tags.`;
         }
       }
       aiAnswerMarkdown = aiResponse?.text || '';
+      
+      const chunks = aiResponse?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+      results = chunks
+        .filter((chunk: any) => chunk?.web?.uri && chunk?.web?.title)
+        .map((chunk: any) => ({
+          title: chunk.web.title,
+          link: chunk.web.uri,
+          snippet: chunk.web.title // fallback snippet
+        }));
     } catch (error: any) {
       let errorMessage = error?.message || 'Failed to generate content.';
       if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
@@ -95,8 +73,6 @@ Format your response in Markdown. Do not include HTML tags.`;
       }
       console.error('Error generating AI answer:', error);
     }
-
-    const results = await searchPromise;
 
     const aiAnswerHtml = aiError 
       ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
