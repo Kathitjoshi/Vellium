@@ -334,7 +334,11 @@ app.post('/api/generate', async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey });
     
+    const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const currentTime = new Date().toLocaleTimeString('en-US');
+
     let systemPrompt = `You are a helpful AI search assistant. 
+The current date is ${currentDate} and the current time is ${currentTime}. Always take this current date and time into account when the user asks about recent events, "next month", "today", "this year", "now", etc.
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
 Format your response in Markdown. Do not include HTML tags.`;
 
