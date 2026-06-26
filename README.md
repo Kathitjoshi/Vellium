@@ -1,7 +1,7 @@
 # Vellium Search Engine
 
 ## Overview
-Vellium is a modern, AI-augmented search interface. Instead of just generating standard search results, Vellium queries multiple open APIs simultaneously, retrieves search results from diverse sources (such as Wikipedia, Dev.to, HackerNews, StackOverflow, and more), and concurrently prompts the Gemini 2.5 Flash model to generate a concise, highly accurate summary of the query. The application then dynamically constructs a responsive results page containing both the web links and the AI-generated summary, which is rendered securely within the main application window. Use [this](https://ollama.com/kathitjoshi/vellium) to understand more about the project
+Vellium is a modern, AI-augmented search interface. Instead of just generating standard search results, Vellium queries multiple open APIs simultaneously, retrieves search results from diverse sources (such as Wikipedia, Dev.to, HackerNews, StackOverflow, and more), and concurrently prompts the Gemini 2.5 Flash model to generate a concise, highly accurate summary of the query. The application then dynamically constructs a responsive results page containing both the web links and the AI-generated summary, which is rendered securely within the main application window. Use [this](https://ollama.com/kathitjoshi/vellium) to understand more about the project and here is the [repo for it](https://github.com/Kathitjoshi/Vellium-Model)
 
 ## Architecture
 The project is built as a full-stack application leveraging modern web technologies:
