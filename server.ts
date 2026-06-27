@@ -3,6 +3,7 @@ import path from 'path';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { marked } from 'marked';
+import pdfParse from 'pdf-parse';
 
 dotenv.config();
 
@@ -17,97 +18,167 @@ function detectIntents(query: string) {
     academic: /\b(history|science|physics|chemistry|biology|english|geography|computer|languages|culture|roman|empire|war)\b/i.test(query),
     audio: /\b(audio|music|song|mp3|podcast|sound|listen)\b/i.test(query),
     documents: /\b(pdf|doc|docx|ppt|pptx|xls|xlsx|csv|json|xml|format)\b/i.test(query),
+    location: /\b(where is|location of|map of|city|country|capital|street)\b/i.test(query),
+    finance: /\b(stock|price of|crypto|bitcoin|ethereum|coin|market|shares)\b/i.test(query),
+    packages: /\b(npm|package|library|install|yarn|dependency)\b/i.test(query),
+    statistics: /\b(compare|statistics|stats|graph|chart|trend|gdp|population|rate|history of (?:price|gdp|population)|data for)\b/i.test(query),
   };
 }
 
-async function fetchSearchResults(query: string, intents: ReturnType<typeof detectIntents>) {
+const isUrl = (str: string) => {
+  try { new URL(str); return true; } catch { return false; }
+};
+
+async function fetchSearchResults(query: string, intents: ReturnType<typeof detectIntents>, tavilyKey?: string) {
   const qEncode = encodeURIComponent(query);
   const results: any[] = [];
   const widgets: any = {};
   
-  const fetchPromises: Promise<any>[] = [
-    fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${qEncode}&utf8=&format=json`)
-      .then(res => res.json())
-      .then(data => {
-        (data.query?.search || []).slice(0, 5).forEach((item: any) => {
-          results.push({
-            title: item.title,
-            link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
-            snippet: item.snippet.replace(/<[^>]*>?/gm, ''),
-            source: 'Wikipedia'
-          });
-        });
-      }).catch(e => console.error('Wikipedia error:', e)),
+  const fetchPromises: Promise<any>[] = [];
 
-    fetch(`https://dev.to/api/articles?search=${qEncode}`)
-      .then(res => res.json())
-      .then(data => {
-        data.slice(0, 5).forEach((item: any) => {
+  if (isUrl(query)) {
+     try {
+       const res = await fetch(query);
+       if (query.toLowerCase().endsWith('.pdf')) {
+          const arrayBuffer = await res.arrayBuffer();
+          const data = await pdfParse(Buffer.from(arrayBuffer));
           results.push({
-            title: item.title,
-            link: item.url,
-            snippet: item.description,
-            source: 'Dev.to'
+             title: 'Parsed PDF Document',
+             link: query,
+             snippet: data.text.substring(0, 5000),
+             source: 'Document Parser'
           });
-        });
-      }).catch(e => console.error('Dev.to error:', e)),
-
-    fetch(`https://hn.algolia.com/api/v1/search?query=${qEncode}`)
-      .then(res => res.json())
-      .then(data => {
-        data.hits.slice(0, 5).forEach((item: any) => {
-          if (item.title && (item.url || item.story_url)) {
+       } else {
+          const text = await res.text();
+          results.push({
+             title: 'Parsed Document',
+             link: query,
+             snippet: text.substring(0, 5000),
+             source: 'Document Parser'
+          });
+       }
+     } catch(e) {
+       console.error('Document parse error:', e);
+     }
+  } else if (tavilyKey) {
+     fetchPromises.push(
+       fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: tavilyKey, query: query, search_depth: 'advanced', include_images: true })
+       })
+       .then(res => res.json())
+       .then(data => {
+          if (data.results) {
+             data.results.slice(0, 8).forEach((item: any) => {
+                results.push({
+                   title: item.title,
+                   link: item.url,
+                   snippet: item.content,
+                   source: 'Tavily Search'
+                });
+             });
+          }
+          if (data.images && data.images.length > 0) {
+             widgets.images = data.images.slice(0, 6);
+          }
+       }).catch(e => console.error('Tavily error:', e))
+     );
+  } else {
+    fetchPromises.push(
+      fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${qEncode}&utf8=&format=json`)
+        .then(res => res.json())
+        .then(data => {
+          (data.query?.search || []).slice(0, 5).forEach((item: any) => {
             results.push({
               title: item.title,
-              link: item.url || item.story_url,
-              snippet: 'HackerNews Discussion',
-              source: 'HackerNews'
+              link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+              snippet: item.snippet.replace(/<[^>]*>?/gm, ''),
+              source: 'Wikipedia'
             });
-          }
-        });
-      }).catch(e => console.error('HN error:', e)),
-
-    fetch(`https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${qEncode}&site=stackoverflow`)
-      .then(res => res.json())
-      .then(data => {
-        data.items.slice(0, 5).forEach((item: any) => {
-          results.push({
-            title: item.title,
-            link: item.link,
-            snippet: 'StackOverflow Question',
-            source: 'StackOverflow'
           });
-        });
-      }).catch(e => console.error('SO error:', e)),
+        }).catch(e => console.error('Wikipedia error:', e))
+    );
 
-    fetch(`https://api.github.com/search/repositories?q=${qEncode}&per_page=5`)
-      .then(res => res.json())
-      .then(data => {
-        data.items.forEach((item: any) => {
-          results.push({
-            title: item.full_name,
-            link: item.html_url,
-            snippet: item.description || 'GitHub Repository',
-            source: 'GitHub'
+    fetchPromises.push(
+      fetch(`https://dev.to/api/articles?search=${qEncode}`)
+        .then(res => res.json())
+        .then(data => {
+          data.slice(0, 5).forEach((item: any) => {
+            results.push({
+              title: item.title,
+              link: item.url,
+              snippet: item.description,
+              source: 'Dev.to'
+            });
           });
-        });
-      }).catch(e => console.error('GitHub error:', e)),
+        }).catch(e => console.error('Dev.to error:', e))
+    );
 
-    fetch(`https://developer.mozilla.org/api/v1/search?q=${qEncode}`)
-      .then(res => res.json())
-      .then(data => {
-        data.documents.slice(0, 5).forEach((item: any) => {
-          results.push({
-            title: item.title,
-            link: `https://developer.mozilla.org${item.mdn_url}`,
-            snippet: item.summary,
-            source: 'MDN Web Docs'
+    fetchPromises.push(
+      fetch(`https://hn.algolia.com/api/v1/search?query=${qEncode}`)
+        .then(res => res.json())
+        .then(data => {
+          data.hits.slice(0, 5).forEach((item: any) => {
+            if (item.title && (item.url || item.story_url)) {
+              results.push({
+                title: item.title,
+                link: item.url || item.story_url,
+                snippet: 'HackerNews Discussion',
+                source: 'HackerNews'
+              });
+            }
           });
-        });
-      }).catch(e => console.error('MDN error:', e))
-  ];
+        }).catch(e => console.error('HN error:', e))
+    );
 
-  if (intents.academic) {
+    fetchPromises.push(
+      fetch(`https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${qEncode}&site=stackoverflow`)
+        .then(res => res.json())
+        .then(data => {
+          data.items.slice(0, 5).forEach((item: any) => {
+            results.push({
+              title: item.title,
+              link: item.link,
+              snippet: 'StackOverflow Question',
+              source: 'StackOverflow'
+            });
+          });
+        }).catch(e => console.error('SO error:', e))
+    );
+
+    fetchPromises.push(
+      fetch(`https://api.github.com/search/repositories?q=${qEncode}&per_page=5`)
+        .then(res => res.json())
+        .then(data => {
+          data.items.forEach((item: any) => {
+            results.push({
+              title: item.full_name,
+              link: item.html_url,
+              snippet: item.description || 'GitHub Repository',
+              source: 'GitHub'
+            });
+          });
+        }).catch(e => console.error('GitHub error:', e))
+    );
+
+    fetchPromises.push(
+      fetch(`https://developer.mozilla.org/api/v1/search?q=${qEncode}`)
+        .then(res => res.json())
+        .then(data => {
+          data.documents.slice(0, 5).forEach((item: any) => {
+            results.push({
+              title: item.title,
+              link: `https://developer.mozilla.org${item.mdn_url}`,
+              snippet: item.summary,
+              source: 'MDN Web Docs'
+            });
+          });
+        }).catch(e => console.error('MDN error:', e))
+    );
+  }
+
+  if (intents.academic && !tavilyKey) {
       fetchPromises.push(
         fetch(`https://api.crossref.org/works?query=${qEncode}&select=title,URL,abstract&rows=5`)
           .then(res => res.json())
@@ -197,7 +268,7 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
       );
   }
 
-  if (intents.images) {
+  if (intents.images && !tavilyKey) {
       const imgQuery = query.replace(/\b(images?|pics?|pictures?|photos?|of|show me)\b/ig, '').trim() || 'nature';
       fetchPromises.push(
           fetch(`https://en.wikipedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(imgQuery)}&prop=imageinfo&iiprop=url&format=json`)
@@ -262,6 +333,59 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
       );
   }
 
+  if (intents.location) {
+      const locQuery = query.replace(/\b(where is|location of|map of|city|country|capital|street)\b/ig, '').trim() || query;
+      fetchPromises.push(
+          fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(locQuery)}&limit=1`)
+          .then(r => r.json())
+          .then(data => {
+              if (data && data.length > 0) {
+                  widgets.location = {
+                      name: data[0].display_name,
+                      lat: data[0].lat,
+                      lon: data[0].lon
+                  };
+              }
+          }).catch(e => console.error('Location error:', e))
+      );
+  }
+
+  if (intents.finance) {
+      const finQuery = query.replace(/\b(stock|price of|crypto|coin|market|shares)\b/ig, '').trim() || query;
+      fetchPromises.push(
+          fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(finQuery)}`)
+          .then(r => r.json())
+          .then(data => {
+              if (data && data.coins && data.coins.length > 0) {
+                  widgets.finance = data.coins.slice(0, 3).map((c: any) => ({
+                      name: c.name,
+                      symbol: c.symbol,
+                      thumb: c.thumb,
+                      rank: c.market_cap_rank
+                  }));
+              }
+          }).catch(e => console.error('Finance error:', e))
+      );
+  }
+
+  if (intents.packages) {
+      const pkgQuery = query.replace(/\b(npm|package|library|install|yarn|dependency)\b/ig, '').trim() || query;
+      fetchPromises.push(
+          fetch(`https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(pkgQuery)}&size=3`)
+          .then(r => r.json())
+          .then(data => {
+              if (data && data.objects && data.objects.length > 0) {
+                  widgets.packages = data.objects.map((o: any) => ({
+                      name: o.package.name,
+                      version: o.package.version,
+                      description: o.package.description,
+                      link: o.package.links.npm
+                  }));
+              }
+          }).catch(e => console.error('Packages error:', e))
+      );
+  }
+
   await Promise.allSettled(fetchPromises);
   
   return {
@@ -269,6 +393,7 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
       const score = (r: any) => {
          let s = 0;
          const source = r.source;
+         if (source === 'Tavily Search' || source === 'Document Parser') return 100;
          if (intents.code) {
              if (source === 'MDN Web Docs') s = 100;
              else if (source === 'StackOverflow') s = 90;
@@ -322,7 +447,7 @@ app.use(express.json());
 
 app.post('/api/generate', async (req, res) => {
   try {
-    const { prompt } = req.body;
+    const { prompt, tavilyKey, history } = req.body;
     
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -330,7 +455,25 @@ app.post('/api/generate', async (req, res) => {
     }
 
     const intents = detectIntents(prompt);
-    const searchPromise = fetchSearchResults(prompt, intents);
+    const searchPromise = fetchSearchResults(prompt, intents, tavilyKey);
+    
+    let locationContext = '';
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    if (ip && ip !== '::1' && ip !== '127.0.0.1') {
+       try {
+          const locRes = await fetch(`http://ip-api.com/json/${(ip as string).split(',')[0]}`);
+          const loc = await locRes.json();
+          if (loc.status === 'success') {
+             locationContext = `\nThe user is currently located in: ${loc.city}, ${loc.regionName}, ${loc.country} (Lat: ${loc.lat}, Lon: ${loc.lon}). Use this location for local queries (e.g. "near me", "weather").`;
+          }
+       } catch (e) { }
+    }
+
+    const searchData = await searchPromise;
+    const results = searchData.results;
+    const widgets = searchData.widgets;
+
+    const contextSnippets = results.slice(0, 5).map((r: any) => `- ${r.title}: ${r.snippet}`).join('\n');
 
     const ai = new GoogleGenAI({ apiKey });
     
@@ -338,29 +481,48 @@ app.post('/api/generate', async (req, res) => {
     const currentTime = new Date().toLocaleTimeString('en-US');
 
     let systemPrompt = `You are a helpful AI search assistant. 
-The current date is ${currentDate} and the current time is ${currentTime}. Always take this current date and time into account when the user asks about recent events, "next month", "today", "this year", "now", etc.
+The current date is ${currentDate} and the current time is ${currentTime}. Always take this current date and time into account when the user asks about recent events, "next month", "today", "this year", "now", etc.${locationContext}
+Here is some real-time web context that might help answer the user (incorporate this into your answer if relevant):
+${contextSnippets}
 Provide a clear, concise, and highly accurate summary or answer to the user's query.
-Format your response in Markdown. Do not include HTML tags.`;
+Format your response in Markdown. Do not include HTML tags.
+At the very end of your response, on a new line, you MUST provide exactly 3 related follow-up search queries separated by the pipe character like this:
+RELATED: query 1 | query 2 | query 3`;
 
     if (intents.math) {
-        systemPrompt = `You are an expert mathematician and calculator. The user is asking a math question. Provide the final numerical answer clearly at the very top in a large heading (e.g., # Answer: 42), followed by a brief step-by-step explanation or formula.`;
+        systemPrompt = `You are an expert mathematician and calculator. The user is asking a math question. Provide the final numerical answer clearly at the very top in a large heading (e.g., # Answer: 42), followed by a brief step-by-step explanation or formula.\nAt the very end of your response, on a new line, provide exactly 3 related queries like this:\nRELATED: query 1 | query 2 | query 3`;
     } else if (intents.code) {
-        systemPrompt = `You are an expert software engineer. The user is asking a programming question. Provide the answer with clear, well-commented code blocks and a brief explanation of how it works.`;
+        systemPrompt = `You are an expert software engineer. The user is asking a programming question. Provide the answer with clear, well-commented code blocks and a brief explanation of how it works. You MUST wrap all code in Markdown code blocks.\nAt the very end of your response, on a new line, provide exactly 3 related queries like this:\nRELATED: query 1 | query 2 | query 3`;
     } else if (intents.documents) {
-        systemPrompt = `You are a data and document formatting expert. The user is asking about a specific document format (PDF, JSON, CSV, XML, etc.). Provide a clear structural example or explain how to parse/generate that format efficiently.`;
+        systemPrompt = `You are a data and document formatting expert. The user is asking about a specific document format (PDF, JSON, CSV, XML, etc.). Provide a clear structural example or explain how to parse/generate that format efficiently.\nAt the very end of your response, on a new line, provide exactly 3 related queries like this:\nRELATED: query 1 | query 2 | query 3`;
+    }
+
+    if (intents.statistics) {
+        systemPrompt += `\nThe user asked for statistics or data comparisons. In addition to your written response, you MUST provide a JSON array at the VERY BEGINNING of your response wrapped in \`\`\`json chart_data ... \`\`\` format containing { "type": "bar" | "line", "labels": [...], "datasets": [{ "label": "...", "data": [...] }] } so a Chart.js visualization can be rendered. Then write your explanation below it.`;
+    }
+
+    let chatHistory: any[] = [];
+    if (history && history.length > 0) {
+        history.slice(-3).forEach((h: any) => {
+            chatHistory.push({ role: 'user', parts: [{ text: h.prompt }] });
+            chatHistory.push({ role: 'model', parts: [{ text: h.aiAnswer || "..." }] });
+        });
     }
 
     let aiAnswerMarkdown = '';
     let aiError = '';
+    let relatedQueries: string[] = [];
+    let chartJson = null;
 
     try {
       let retries = 2;
       let aiResponse;
       while (retries > 0) {
         try {
+          const contents = [...chatHistory, { role: 'user', parts: [{ text: prompt }] }];
           aiResponse = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: prompt,
+            contents: contents,
             config: {
                systemInstruction: systemPrompt,
                temperature: 0.5
@@ -378,6 +540,20 @@ Format your response in Markdown. Do not include HTML tags.`;
         }
       }
       aiAnswerMarkdown = aiResponse?.text || '';
+      
+      const relatedMatch = aiAnswerMarkdown.match(/RELATED:\s*(.*)/i);
+      if (relatedMatch) {
+         relatedQueries = relatedMatch[1].split('|').map((q: string) => q.trim()).filter(Boolean);
+         aiAnswerMarkdown = aiAnswerMarkdown.replace(/RELATED:\s*(.*)/i, '').trim();
+      }
+
+      const chartMatch = aiAnswerMarkdown.match(/```json\s*chart_data([\s\S]*?)```/);
+      if (chartMatch) {
+         try {
+             chartJson = JSON.parse(chartMatch[1].trim());
+             aiAnswerMarkdown = aiAnswerMarkdown.replace(chartMatch[0], '').trim();
+         } catch(e) {}
+      }
     } catch (error: any) {
       let errorMessage = error?.message || 'Failed to generate content.';
       if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
@@ -387,10 +563,6 @@ Format your response in Markdown. Do not include HTML tags.`;
       }
       console.error('Error generating AI answer:', error);
     }
-
-    const searchData = await searchPromise;
-    const results = searchData.results;
-    const widgets = searchData.widgets;
 
     const aiAnswerHtml = aiError 
       ? `<div class="text-red-400 font-mono text-sm bg-red-500/10 p-4 rounded-lg border border-red-500/20">${aiError}</div>`
@@ -404,6 +576,10 @@ Format your response in Markdown. Do not include HTML tags.`;
   <title>${prompt} - Vellium Search</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/tokyo-night-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>document.addEventListener('DOMContentLoaded', (event) => { hljs.highlightAll(); });</script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
     body { font-family: 'Inter', sans-serif; }
@@ -428,6 +604,7 @@ Format your response in Markdown. Do not include HTML tags.`;
   </style>
 </head>
 <body class="bg-[#0a0a0a] text-neutral-200 min-h-screen selection:bg-cyan-500/30">
+  <div id="aiAnswerExport" data-md="${encodeURIComponent(aiAnswerMarkdown)}" style="display:none;"></div>
   <div class="max-w-4xl mx-auto p-6 md:p-8">
     <div class="mb-10">
       <h1 class="text-3xl font-semibold text-white tracking-tight mb-2 capitalize">${prompt}</h1>
@@ -445,12 +622,107 @@ Format your response in Markdown. Do not include HTML tags.`;
         </div>
         <h2 class="text-lg font-medium text-cyan-100">AI Summary</h2>
       </div>
-      <div class="prose prose-invert prose-cyan max-w-none text-base leading-relaxed">
+
+      ${chartJson ? `
+      <div class="mb-8 p-4 bg-neutral-900 rounded-xl border border-neutral-800">
+         <canvas id="aiChart"></canvas>
+      </div>
+      <script>
+         document.addEventListener('DOMContentLoaded', () => {
+            const ctx = document.getElementById('aiChart').getContext('2d');
+            new Chart(ctx, {
+               type: '${chartJson.type || 'bar'}',
+               data: {
+                  labels: ${JSON.stringify(chartJson.labels || [])},
+                  datasets: ${JSON.stringify(chartJson.datasets || [])}.map(d => ({...d, backgroundColor: 'rgba(34, 211, 238, 0.5)', borderColor: 'rgba(34, 211, 238, 1)', borderWidth: 1}))
+               },
+               options: {
+                  responsive: true,
+                  plugins: { legend: { labels: { color: '#d4d4d4' } } },
+                  scales: { 
+                     x: { ticks: { color: '#a3a3a3' }, grid: { color: '#262626' } },
+                     y: { ticks: { color: '#a3a3a3' }, grid: { color: '#262626' } }
+                  }
+               }
+            });
+         });
+      </script>
+      ` : ''}
+
+      <div class="prose prose-invert prose-cyan max-w-none text-base leading-relaxed" id="ai-content-stream">
         ${aiAnswerHtml}
       </div>
+      
+      ${relatedQueries.length > 0 ? `
+      <div class="mt-8 border-t border-neutral-800/80 pt-6">
+        <h4 class="text-xs font-bold text-neutral-500 mb-4 uppercase tracking-widest">People also ask</h4>
+        <div class="flex flex-wrap gap-2">
+          ${relatedQueries.map(q => `
+             <button onclick="window.parent.postMessage({ type: 'vellium_search', query: '${q.replace(/'/g, "\\'")}' }, '*')" class="px-4 py-2 bg-neutral-900 hover:bg-cyan-900/30 border border-neutral-800 hover:border-cyan-900/80 text-cyan-200 rounded-full text-sm flex items-center shrink-0 shadow-sm transition-colors cursor-pointer">
+                <svg class="w-3.5 h-3.5 mr-2 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                ${q}
+             </button>
+          `).join('')}
+        </div>
+      </div>
+      ` : ''}
     </div>
 
     <!-- Widgets Section -->
+    ${widgets.location ? `
+      <div class="mb-6 bg-[#161616] rounded-2xl p-6 shadow-xl border border-neutral-800">
+         <div class="flex items-start space-x-4">
+            <div class="w-12 h-12 rounded bg-neutral-800 flex items-center justify-center shrink-0">
+               <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+            </div>
+            <div>
+               <h3 class="text-xl font-bold text-white mb-1">Map Location</h3>
+               <p class="text-neutral-300 text-sm mb-3">${widgets.location.name}</p>
+               <div class="flex space-x-3">
+                  <a href="https://www.openstreetmap.org/?mlat=${widgets.location.lat}&mlon=${widgets.location.lon}#map=12/${widgets.location.lat}/${widgets.location.lon}" target="_blank" class="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white rounded-lg text-sm font-medium transition-colors">View on OpenStreetMap</a>
+               </div>
+            </div>
+         </div>
+      </div>
+    ` : ''}
+
+    ${widgets.finance ? `
+      <div class="mb-6 bg-[#161616] rounded-2xl p-6 shadow-xl border border-neutral-800">
+         <h3 class="text-lg font-medium text-neutral-200 mb-4 flex items-center"><svg class="w-5 h-5 mr-2 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> Finance & Crypto</h3>
+         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            ${widgets.finance.map((c: any) => `
+              <div class="bg-neutral-900 rounded-xl p-4 border border-neutral-800 flex items-center space-x-3">
+                 <img src="${c.thumb}" class="w-10 h-10 rounded-full bg-white object-contain" alt="${c.name}">
+                 <div>
+                    <h4 class="text-white font-medium">${c.name}</h4>
+                    <p class="text-neutral-400 text-xs uppercase">${c.symbol} • Rank #${c.rank || 'N/A'}</p>
+                 </div>
+              </div>
+            `).join('')}
+         </div>
+      </div>
+    ` : ''}
+
+    ${widgets.packages ? `
+      <div class="mb-6 bg-[#161616] rounded-2xl p-6 shadow-xl border border-neutral-800">
+         <h3 class="text-lg font-medium text-neutral-200 mb-4 flex items-center"><svg class="w-5 h-5 mr-2 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path></svg> NPM Packages</h3>
+         <div class="space-y-3">
+            ${widgets.packages.map((pkg: any) => `
+              <div class="bg-neutral-900 rounded-xl p-4 border border-neutral-800 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                 <div>
+                    <a href="${pkg.link}" target="_blank" class="text-cyan-400 font-bold hover:underline text-lg">${pkg.name}</a>
+                    <span class="text-xs text-neutral-500 ml-2 border border-neutral-700 px-2 py-0.5 rounded-full">v${pkg.version}</span>
+                    <p class="text-neutral-400 text-sm mt-1">${pkg.description || 'No description available'}</p>
+                 </div>
+                 <div class="bg-black border border-neutral-800 rounded px-3 py-1.5 font-mono text-sm text-neutral-300 shrink-0">
+                    npm i ${pkg.name}
+                 </div>
+              </div>
+            `).join('')}
+         </div>
+      </div>
+    ` : ''}
+
     ${widgets.audio ? `
       <div class="mb-6">
         <h3 class="text-lg font-medium text-neutral-200 mb-3 flex items-center"><svg class="w-5 h-5 mr-2 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"></path></svg> Audio & Music</h3>
@@ -565,9 +837,7 @@ Format your response in Markdown. Do not include HTML tags.`;
         <div class="group">
            <a href="${r.link}" target="_blank" class="block p-5 bg-[#111111] border border-neutral-800/50 hover:border-neutral-700 hover:bg-[#141414] rounded-xl transition-all duration-200 shadow-sm hover:shadow-md">
              <div class="flex items-center space-x-2 mb-2">
-               <div class="w-5 h-5 rounded bg-neutral-800 flex items-center justify-center">
-                 <svg class="w-3 h-3 text-neutral-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
-               </div>
+               <img src="https://s2.googleusercontent.com/s2/favicons?sz=64&domain_url=${new URL(r.link.startsWith('http') ? r.link : 'https://'+r.link).origin}" class="w-5 h-5 rounded bg-neutral-800 p-0.5 object-contain" alt="Favicon">
                <p class="text-xs text-neutral-400 font-medium truncate">${r.source} • ${new URL(r.link.startsWith('http') ? r.link : 'https://'+r.link).hostname.replace('www.','')}</p>
              </div>
              <h4 class="text-lg font-medium text-blue-400 group-hover:text-blue-300 group-hover:underline decoration-blue-500/30 underline-offset-4 mb-2 leading-tight">${r.title}</h4>
@@ -580,7 +850,7 @@ Format your response in Markdown. Do not include HTML tags.`;
 </body>
 </html>`;
 
-    res.json({ html: htmlTemplate });
+    res.json({ html: htmlTemplate, aiAnswerMarkdown });
   } catch (error: any) {
     console.error('Fatal generation error:', error);
     res.status(500).json({ error: error.message || 'An unexpected error occurred.' });
