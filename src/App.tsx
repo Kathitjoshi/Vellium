@@ -10,6 +10,7 @@ import {
 interface HistoryEntry {
   prompt: string;
   html: string;
+  aiAnswer?: string;
 }
 
 interface BookmarkEntry {
@@ -73,9 +74,24 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(false);
   const [activeSettingsTab, setActiveSettingsTab] = useState('privacy');
   const [aiSystemPrompt, setAiSystemPrompt] = useState("You are a helpful AI search assistant. Provide a clear, concise, and highly accurate summary or answer to the user's query.");
+  const [tavilyKey, setTavilyKey] = useState(() => localStorage.getItem('vellium_tavily_key') || '');
   const [homeBgUrl, setHomeBgUrl] = useState(`https://picsum.photos/1920/1080?random=${Date.now()}`);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem('vellium_tavily_key', tavilyKey);
+  }, [tavilyKey]);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'vellium_search' && event.data?.query) {
+        handleGenerate(event.data.query);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   // Persist history when changed
   useEffect(() => {
@@ -118,7 +134,12 @@ export default function App() {
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptToUse, systemPrompt: aiSystemPrompt })
+        body: JSON.stringify({ 
+          prompt: promptToUse, 
+          systemPrompt: aiSystemPrompt,
+          tavilyKey,
+          history: history.slice(-5)
+        })
       });
       const data = await response.json();
       
@@ -129,7 +150,7 @@ export default function App() {
         newHtml = `<div style="color:red; font-family:monospace; padding: 20px; background: #000; height: 100vh;">[SYS_ERR]: ${data.error || 'Failed to initialize sequence.'}</div>`;
       }
       
-      const newEntry = { prompt: promptToUse, html: newHtml };
+      const newEntry = { prompt: promptToUse, html: newHtml, aiAnswer: data.aiAnswerMarkdown };
       const baseHistory = currentIndex === -1 ? history : history.slice(0, currentIndex + 1);
       const newHistory = baseHistory.filter(e => e.prompt !== newEntry.prompt);
       newHistory.push(newEntry);
@@ -667,18 +688,38 @@ export default function App() {
                         )}
                         
                         {activeSettingsTab === 'advanced' && (
-                          <div className="p-5 bg-neutral-950/50 rounded-xl border border-neutral-800/80 hover:border-neutral-700 transition-colors">
-                            <div className="flex items-start justify-between">
-                              <div>
-                                <div className="font-medium text-neutral-200">Developer Console</div>
-                                <div className="text-sm text-neutral-500 mt-1">View the raw HTML source of the currently loaded page</div>
+                          <div className="space-y-4">
+                            <div className="p-5 bg-neutral-950/50 rounded-xl border border-neutral-800/80 hover:border-neutral-700 transition-colors">
+                              <div className="flex flex-col space-y-2">
+                                <div>
+                                  <div className="font-medium text-neutral-200 flex items-center space-x-2">
+                                    <span>Tavily Search API Key</span>
+                                  </div>
+                                  <div className="text-sm text-neutral-500 mt-1">Unlock deeper web search using Tavily.</div>
+                                </div>
+                                <input 
+                                  type="password"
+                                  value={tavilyKey}
+                                  onChange={(e) => setTavilyKey(e.target.value)}
+                                  placeholder="tvly-..."
+                                  className="w-full bg-neutral-900 border border-neutral-800 text-neutral-200 px-4 py-2 rounded-lg focus:outline-none focus:border-cyan-500/50 mt-2 font-mono text-sm"
+                                />
                               </div>
-                              <button 
-                                onClick={() => { setShowSettings(false); setShowDevTools(true); }}
-                                className="px-4 py-2 bg-neutral-800 text-neutral-300 hover:bg-neutral-700 rounded-lg transition-colors text-sm font-medium"
-                              >
-                                Open
-                              </button>
+                            </div>
+                            
+                            <div className="p-5 bg-neutral-950/50 rounded-xl border border-neutral-800/80 hover:border-neutral-700 transition-colors">
+                              <div className="flex items-start justify-between">
+                                <div>
+                                  <div className="font-medium text-neutral-200">Developer Console</div>
+                                  <div className="text-sm text-neutral-500 mt-1">View the raw HTML source of the currently loaded page</div>
+                                </div>
+                                <button 
+                                  onClick={() => { setShowSettings(false); setShowDevTools(true); }}
+                                  className="px-4 py-2 bg-neutral-800 text-neutral-300 hover:bg-neutral-700 rounded-lg transition-colors text-sm font-medium"
+                                >
+                                  Open
+                                </button>
+                              </div>
                             </div>
                           </div>
                         )}
