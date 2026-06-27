@@ -362,7 +362,7 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
                       results.push({
                           title: d.show.name,
                           link: d.show.url,
-                          snippet: (d.show.summary || '').replace(/<[^>]*>?/gm, '').substring(0, 200) + \` (Genres: \${d.show.genres?.join(', ')})\`,
+                          snippet: (d.show.summary || '').replace(/<[^>]*>?/gm, '').substring(0, 200) + ` (Genres: ${d.show.genres?.join(', ')})`,
                           source: 'TVMaze'
                       });
                   });
@@ -382,7 +382,7 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
                       results.push({
                           title: m.strMeal,
                           link: m.strSource || m.strYoutube || '#',
-                          snippet: \`Category: \${m.strCategory}. Area: \${m.strArea}. Instructions: \${m.strInstructions?.substring(0, 150)}...\`,
+                          snippet: `Category: ${m.strCategory}. Area: ${m.strArea}. Instructions: ${m.strInstructions?.substring(0, 150)}...`,
                           source: 'TheMealDB'
                       });
                   });
@@ -401,8 +401,8 @@ async function fetchSearchResults(query: string, intents: ReturnType<typeof dete
                   data.data.forEach((a: any) => {
                       results.push({
                           title: a.title,
-                          link: \`https://www.artic.edu/artworks/\${a.id}\`,
-                          snippet: \`Artist: \${a.artist_title || 'Unknown'}. \${(a.description || '').replace(/<[^>]*>?/gm, '').substring(0, 150)}\`,
+                          link: `https://www.artic.edu/artworks/${a.id}`,
+                          snippet: `Artist: ${a.artist_title || 'Unknown'}. ${(a.description || '').replace(/<[^>]*>?/gm, '').substring(0, 150)}`,
                           source: 'Art Institute'
                       });
                   });
@@ -838,9 +838,9 @@ async function setupVite() {
 }
 
 if (process.env.VERCEL !== '1') {
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   setupVite().then(() => {
-    app.listen(PORT, '0.0.0.0' as any, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });
   });
