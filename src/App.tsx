@@ -10,6 +10,7 @@ import {
 interface HistoryEntry {
   prompt: string;
   html: string;
+  aiAnswer?: string;
 }
 
 interface BookmarkEntry {
@@ -76,6 +77,16 @@ export default function App() {
   const [homeBgUrl, setHomeBgUrl] = useState(`https://picsum.photos/1920/1080?random=${Date.now()}`);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'vellium_search' && event.data?.query) {
+        handleGenerate(event.data.query);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   // Persist history when changed
   useEffect(() => {
@@ -719,3 +730,4 @@ export default function App() {
     </div>
   );
 }
+
