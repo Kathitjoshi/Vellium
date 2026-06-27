@@ -11,6 +11,7 @@ Vellium is a modern, AI-augmented search interface. Instead of just generating s
 
 <img width="1928" height="1361" alt="Screenshot 2026-06-27 202711" src="https://github.com/user-attachments/assets/9dc8a993-9629-4035-81d5-540b26f779cd" />
 
+<img width="1618" height="897" alt="Screenshot 2026-06-27 203410" src="https://github.com/user-attachments/assets/3fd71094-9eba-49b9-ba4f-e7973bdd72d9" />
 
 
 ## Architecture
